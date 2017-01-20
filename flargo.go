@@ -22,7 +22,7 @@ func main() {
 Usage: flargo start CONFIG
               wait FLOW
               describe FLOW
-              resume FLOW STEP
-              ignore FLOW STEP
+              retry FLOW EXECUTION
+              skip FLOW EXECUTION
 `)
 }
