@@ -37,6 +37,23 @@ A `flargo` config is a list of executions and their dependencies.
 
 ## config
 
+### syntax
+
+Each execution is specified as follows.
+```
+<type>: <name>([<dependency>(,<dependency>)*) { <execution config> }
+```
+
+`type` may be "exec" or "wait".
+
+`name` is an identifier for the execution.
+
+`dependency` is the name of some other execution, defined earlier in the config file. It may be aliased like `foo as bar` to have a depdenecy named `foo` appear in the execution as `bar`.
+
+`execution config` is whatever config is appropriate for the execution. For `exec`, it's a yaml document appropriate for cloudbuild. For "wait", it is empty.
+
+Lines beginning with `#` are comments.
+
 ### working example
 ```
 # build will begin immediately.
