@@ -1,4 +1,9 @@
 steps:
+
+# Build the coord image.
+- name: 'gcr.io/cloud-builders/go:wheezy'
+  args: ['install', './coord']
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '--tag', 'gcr.io/$PROJECT_ID/coord', '.']
+  args: ['build', '--tag', 'gcr.io/$PROJECT_ID/coord', '-f', 'coord/Dockerfile', '.']
+
 images: ['gcr.io/$PROJECT_ID/coord']
