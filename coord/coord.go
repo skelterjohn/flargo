@@ -46,33 +46,31 @@ func main() {
 		fmt.Println("Usage: %s ID", os.Args[0])
 	}
 
-	buildID := os.Args[1]
+	workflowID := os.Args[1]
 	projectID, err := metadata.ProjectID()
 	if err != nil {
 		log.Fatalf("Could not get project ID")
 	}
 
-	ts := google.ComputeTokenSource("")
-
-	client := oauth2.NewClient(ctx, ts)
+	client := oauth2.NewClient(ctx, google.ComputeTokenSource(""))
 
 	pubsub, err := pubsub_v1.New(client)
 	if err != nil {
 		log.Fatalf("Could not create pubsub client: %v", err)
 	}
 
-	tname := fmt.Sprintf("projects/%s/topics/workflow-%s", projectID, buildID)
+	tname := fmt.Sprintf("projects/%s/topics/workflow-%s", projectID, workflowID)
 
 	if _, err := pubsub.Projects.Topics.Create(tname, &pubsub_v1.Topic{
-		Name: buildID,
+		Name: workflowID,
 	}).Do(); err != nil {
 		log.Fatalf("Could not create topic: %v", err)
 	}
 
-	sname := fmt.Sprintf("projects/%s/subscriptions/coord-%s", projectID, buildID)
+	sname := fmt.Sprintf("projects/%s/subscriptions/coord-%s", projectID, workflowID)
 
 	if _, err := pubsub.Projects.Subscriptions.Create(sname, &pubsub_v1.Subscription{
-		Name:  "coord-" + buildID,
+		Name:  "coord-" + workflowID,
 		Topic: tname,
 	}).Do(); err != nil {
 		log.Fatalf("Could not create subscription: %v", err)

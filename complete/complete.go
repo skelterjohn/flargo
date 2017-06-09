@@ -54,7 +54,6 @@ func main() {
 
 	workflowID := os.Args[1]
 	executionID := os.Args[2]
-
 	projectID, err := metadata.ProjectID()
 	if err != nil {
 		log.Fatalf("Could not get project ID")
