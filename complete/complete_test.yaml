@@ -1,0 +1,3 @@
+steps:
+- name: 'gcr.io/$PROJECT_ID/complete'
+  args: ['$_WORKFLOW_ID', 'complete']
