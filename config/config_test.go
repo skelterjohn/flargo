@@ -13,6 +13,7 @@ limitations under the License.
 package config
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ exec: deploy_to_prod(dev_to_prod) deploy_prod.yaml
 
 # Once prod is ready, run the probes (built earlier) to check that things are
 # working.
-exec: test_prod(deploy_to_prod, build_probes) test_prod.yaml
+exec: test_prod(deploy_to_prod as deploy, build_probes) test_prod.yaml
 `)
 	expected := Config{
 		Executions: []Execution{{
@@ -70,7 +71,7 @@ exec: test_prod(deploy_to_prod, build_probes) test_prod.yaml
 			Name: "test_dev",
 			Params: []Param{{
 				Name: "deploy_to_dev",
-			},{
+			}, {
 				Name: "build_probes",
 			}},
 			Path: "test_dev.yaml",
@@ -92,7 +93,8 @@ exec: test_prod(deploy_to_prod, build_probes) test_prod.yaml
 			Type: "exec",
 			Name: "test_prod",
 			Params: []Param{{
-				Name: "deploy_to_prod",
+				Name:  "deploy_to_prod",
+				Alias: "deploy",
 			}, {
 				Name: "build_probes",
 			}},
@@ -100,7 +102,11 @@ exec: test_prod(deploy_to_prod, build_probes) test_prod.yaml
 		}},
 	}
 	config, err := Parse(r)
-	t.Log(config, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jdata, _ := json.MarshalIndent(config, " ", " ")
+	t.Logf("%s\n", jdata)
 	if len(config.Executions) != len(expected.Executions) {
 		t.Error("wrong")
 	} else {

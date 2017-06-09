@@ -46,7 +46,6 @@ func Parse(r io.Reader) (*Config, error) {
 	}
 
 	lines := strings.Split(string(data), "\n")
-	fmt.Println(lines)
 
 	var c Config
 
