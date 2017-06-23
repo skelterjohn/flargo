@@ -1,0 +1,7 @@
+steps:
+- name: 'ubuntu'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    echo "Hello, everyone!"

@@ -1,0 +1,8 @@
+steps:
+- name: 'ubuntu'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    echo "Hello, left!"
+    sleep 1s
