@@ -4,9 +4,13 @@ steps:
 - name: 'gcr.io/cloud-builders/golang-project:wheezy'
   args: ['github.com/skelterjohn/flargo/coord', '--skip-tests', '--base-image=gcr.io/cloud-builders/gcloud', '--tag', 'gcr.io/$PROJECT_ID/coord']
 # Build the complete image.
-- name: 'gcr.io/cloud-builders/golang-project:wheezy'
-  args: ['github.com/skelterjohn/flargo/complete', '--skip-tests', '--base-image=gcr.io/cloud-builders/gcloud', '--tag', 'gcr.io/$PROJECT_ID/complete']
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '--tag', 'gcr.io/$PROJECT_ID/complete', '-f', 'complete/Dockerfile', 'complete']
+# Build the wait image.
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '--tag', 'gcr.io/$PROJECT_ID/wait', '-f', 'wait/Dockerfile', 'wait']
 
 images:
 - 'gcr.io/$PROJECT_ID/coord'
 - 'gcr.io/$PROJECT_ID/complete'
+- 'gcr.io/$PROJECT_ID/wait'
