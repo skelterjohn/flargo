@@ -67,6 +67,8 @@ func main() {
 		log.Fatalf("Could not create topic: %v", err)
 	}
 
+	log.Printf("Created topic %q", tname)
+
 	sname := fmt.Sprintf("projects/%s/subscriptions/coord-%s", projectID, workflowID)
 
 	if _, err := pubsub.Projects.Subscriptions.Create(sname, &pubsub_v1.Subscription{
