@@ -6,4 +6,4 @@ for import in $imports; do
 	go get "$import" || exit
 done
 mv vendor/src/* vendor
-rm -r vendor/src
+rm -r vendor/src vendor/pkg
