@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"strings"
 )
 
@@ -25,6 +26,7 @@ type ':' name '(' name [ 'as' bar ] ')' file
 
 type Config struct {
 	Executions []Execution
+	Path       string
 }
 
 type Execution struct {
@@ -37,6 +39,21 @@ type Execution struct {
 type Param struct {
 	Name  string
 	Alias string
+}
+
+func Load(path string) (*Config, error) {
+	fin, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("could not open %q: %v", path, err)
+	}
+	cfg, err := Parse(fin)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse %q: %v", path, err)
+	}
+
+	cfg.Path = path
+
+	return cfg, nil
 }
 
 func Parse(r io.Reader) (*Config, error) {
@@ -101,6 +118,14 @@ func Parse(r io.Reader) (*Config, error) {
 		e.Path = s
 
 		c.Executions = append(c.Executions, e)
+	}
+
+	names := map[string]bool{}
+	for _, e := range c.Executions {
+		if names[e.Name] {
+			return nil, fmt.Errorf("repeated name %q", e.Name)
+		}
+		names[e.Name] = true
 	}
 
 	return &c, nil

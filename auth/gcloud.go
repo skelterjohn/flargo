@@ -23,7 +23,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-type sdkConfigReport struct {
+type ConfigReport struct {
 	Configuration struct {
 		ActiveConfiguration string                       `json:"active_configuration"`
 		Properties          map[string]map[string]string `json:"properties"`
@@ -32,6 +32,15 @@ type sdkConfigReport struct {
 		AccessToken string `json:"access_token"`
 		TokenExpiry string `json:"token_expiry"`
 	} `json:"credential"`
+}
+
+func (cr ConfigReport) GetProperty(section, name string) (string, bool) {
+	s, ok := cr.Configuration.Properties[section]
+	if !ok {
+		return "", false
+	}
+	p, ok := s[name]
+	return p, ok
 }
 
 // An SDKConfig provides access to tokens from an account already
@@ -52,7 +61,7 @@ func NewSDK(account string) (*SDK, error) {
 	}, nil
 }
 
-func readConfigHelper() (*sdkConfigReport, error) {
+func ReadConfigHelper() (*ConfigReport, error) {
 	cmd := exec.Command("gcloud", "config", "config-helper", "--format=json")
 	// TODO: use specified account
 	//cmd.Env = []string{"CLOUDSDK_CORE_ACCOUNT=" + c.Account}
@@ -61,7 +70,7 @@ func readConfigHelper() (*sdkConfigReport, error) {
 		return nil, fmt.Errorf("getting gcloud config: %v", err)
 	}
 
-	cfg := &sdkConfigReport{}
+	cfg := &ConfigReport{}
 	if err := json.Unmarshal(out, cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling gcloud config: %v", err)
 	}
@@ -70,7 +79,7 @@ func readConfigHelper() (*sdkConfigReport, error) {
 }
 
 func (c *SDK) Token() (*oauth2.Token, error) {
-	cfg, err := readConfigHelper()
+	cfg, err := ReadConfigHelper()
 	// eg "2017-06-09T20:04:32Z"
 	// rerference time is "Mon Jan 2 15:04:05 -0700 MST 2006"
 	et, err := time.Parse("2006-01-02T15:04:05Z", cfg.Credential.TokenExpiry)

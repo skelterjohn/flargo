@@ -14,16 +14,23 @@ package main // import "github.com/skelterjohn/flargo"
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
+	"cloud.google.com/go/storage"
 	"golang.org/x/net/context"
 	v1cloudbuild "google.golang.org/api/cloudbuild/v1"
+	"google.golang.org/api/option"
+	v1pubsub "google.golang.org/api/pubsub/v1"
 
 	"github.com/skelterjohn/flargo/auth"
 	"github.com/skelterjohn/flargo/config"
+	"github.com/skelterjohn/flargo/executions"
 )
 
 func usage() {
@@ -51,11 +58,7 @@ func main() {
 			usage()
 		}
 		cfgFile := args[1]
-		fin, err := os.Open(cfgFile)
-		if err != nil {
-			log.Fatalf("Could not open %q: %v", cfgFile, err)
-		}
-		cfg, err := config.Parse(fin)
+		cfg, err := config.Load(cfgFile)
 		if err != nil {
 			log.Fatalf("Could not parse %q: %v", cfgFile, err)
 		}
@@ -92,22 +95,54 @@ func buildFromOp(op *v1cloudbuild.Operation) (*v1cloudbuild.Build, error) {
 	return md.Build, nil
 }
 
-func getCloudbuildClient(ctx context.Context) (*v1cloudbuild.Service, error) {
+func start(ctx context.Context, cfg *config.Config) error {
 	scfg, err := auth.NewSDK("")
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("could not find SDK config: %v", err)
 	}
-	return v1cloudbuild.New(scfg.Client(ctx))
-}
 
-func start(ctx context.Context, cfg *config.Config) error {
-	cb, err := getCloudbuildClient(ctx)
+	ch, err := auth.ReadConfigHelper()
+	if err != nil {
+		return fmt.Errorf("could not read SDK config helper: %v", err)
+	}
+
+	projectID, ok := ch.GetProperty("core", "project")
+	if !ok {
+		return errors.New("no project property set")
+	}
+
+	cb, err := v1cloudbuild.New(scfg.Client(ctx))
 	if err != nil {
 		return fmt.Errorf("could not create cloudbuild client: %v", err)
 	}
+	ps, err := v1pubsub.New(scfg.Client(ctx))
+	if err != nil {
+		return fmt.Errorf("could not create pubsub client: %v", err)
+	}
+	sc, err := storage.NewClient(ctx, option.WithTokenSource(scfg))
+	if err != nil {
+		return fmt.Errorf("could not create storage client: %v", err)
+	}
+	executionsClient := executions.Client{
+		ProjectID: projectID,
+		Builds:    cb,
+		Storage:   sc,
+	}
+
+	cfgDir, _ := filepath.Split(cfg.Path)
+
+	// Load execution configs
+	bconfigs := map[string]*v1cloudbuild.Build{}
+	for _, execution := range cfg.Executions {
+		b, err := executions.LoadBuild(filepath.Join(cfgDir, execution.Path))
+		if err != nil {
+			return err
+		}
+		bconfigs[execution.Name] = b
+	}
 
 	// Start coord
-	op, err := cb.Projects.Builds.Create("cloud-workflows", &v1cloudbuild.Build{
+	op, err := cb.Projects.Builds.Create(projectID, &v1cloudbuild.Build{
 		Steps: []*v1cloudbuild.BuildStep{{
 			Name: "gcr.io/cloud-workflows/coord",
 			Args: []string{"$BUILD_ID"},
@@ -121,10 +156,73 @@ func start(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("could not unmarshal build: %v", err)
 	}
-	log.Println(b.Id)
 
-	// Create subscriptions for each of the executions
-	// Begin executions
+	workflowID := b.Id
+
+	log.Printf("Workflow ID: %s", workflowID)
+
+	for {
+		log, err := executionsClient.FetchBuildLog(ctx, workflowID)
+		if err != nil {
+			return fmt.Errorf("could not fetch workflow log: %v", err)
+		}
+		if strings.Contains(log, "Created topic") {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	// This topic was created by the coord execution.
+	tname := fmt.Sprintf("workflow-%s", workflowID)
+	workflowTopic := fmt.Sprintf("projects/%s/topics/%s", projectID, tname)
+
+	// For each execution,
+	for i, execution := range cfg.Executions {
+		// - Create subscription
+		sname := fmt.Sprintf("workflow-%s-%d", workflowID, i)
+		executionSubscription := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, sname)
+
+		if _, err := ps.Projects.Subscriptions.Create(executionSubscription, &v1pubsub.Subscription{
+			Name:  sname,
+			Topic: workflowTopic,
+		}).Do(); err != nil {
+			return fmt.Errorf("could not create %q subscription: %v", execution.Name, err)
+		}
+
+		var waitExecutions []string
+		for _, param := range execution.Params {
+			waitExecutions = append(waitExecutions, param.Name)
+		}
+
+		// - Augment steps with wait/complete
+		build := bconfigs[execution.Name]
+		build.Steps = append([]*v1cloudbuild.BuildStep{{
+			Name: "gcr.io/cloud-workflows/wait",
+			Args: append(
+				[]string{
+					"gs://todo",
+					workflowID,
+					executionSubscription,
+				},
+				waitExecutions...,
+			),
+		}}, build.Steps...)
+		build.Steps = append(build.Steps,
+			&v1cloudbuild.BuildStep{
+				Name: "gcr.io/cloud-workflows/complete",
+				Args: []string{
+					"gs://todo",
+					workflowID,
+					execution.Name,
+				},
+			},
+		)
+
+		// - Begin execution
+		_, err := cb.Projects.Builds.Create(projectID, build).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("could not create %q execution: %v", execution.Name, err)
+		}
+	}
 
 	return nil
 }
