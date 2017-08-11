@@ -165,6 +165,9 @@ func start(ctx context.Context, cfg *config.Config) error {
 
 	log.Printf("Workflow ID: %s", workflowID)
 
+	// Check the coord execution log to see when it creates the topic.
+	// We can't create the topic before hand because it has the build ID
+	// in it, and we don't know that until the coord execution begins.
 	for {
 		execLog, err := executionsClient.FetchBuildLog(ctx, workflowID)
 		if err != nil && err != storage.ErrObjectNotExist {
