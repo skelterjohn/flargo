@@ -12,4 +12,4 @@ else
   echo "No output to copy."
 fi
 
-gcloud beta pubsub topics publish "workflow-$WORKFLOW_ID" "completed $EXECUTION_ID"
+gcloud beta pubsub topics publish "workflow-$WORKFLOW_ID" "{\"completed\":\"$EXECUTION_ID\"}"

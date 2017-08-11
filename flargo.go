@@ -20,11 +20,13 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/net/context"
 	v1cloudbuild "google.golang.org/api/cloudbuild/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	v1pubsub "google.golang.org/api/pubsub/v1"
 
@@ -43,6 +45,8 @@ Usage: flargo start CONFIG
               skip FLOW EXECUTION
 `)
 }
+
+// TODO: configure gcr.io/cloud-workflows/<flargo image> to use customer project registries.
 
 func main() {
 	ctx := context.Background()
@@ -162,11 +166,11 @@ func start(ctx context.Context, cfg *config.Config) error {
 	log.Printf("Workflow ID: %s", workflowID)
 
 	for {
-		log, err := executionsClient.FetchBuildLog(ctx, workflowID)
-		if err != nil {
+		execLog, err := executionsClient.FetchBuildLog(ctx, workflowID)
+		if err != nil && err != storage.ErrObjectNotExist {
 			return fmt.Errorf("could not fetch workflow log: %v", err)
 		}
-		if strings.Contains(log, "Created topic") {
+		if err == nil && strings.Contains(execLog, "Created topic") {
 			break
 		}
 		time.Sleep(time.Second)
@@ -174,54 +178,98 @@ func start(ctx context.Context, cfg *config.Config) error {
 	// This topic was created by the coord execution.
 	tname := fmt.Sprintf("workflow-%s", workflowID)
 	workflowTopic := fmt.Sprintf("projects/%s/topics/%s", projectID, tname)
+	log.Printf("worklow topic: %s", workflowTopic)
+
+	// Ensure a GCS place for artifacts.
+	gcsBucket := fmt.Sprintf("%s_workflow_artifacts", projectID)
+	gcsPrefix := fmt.Sprintf("gs://%s/%s", gcsBucket, workflowID)
+	// Create the bucket. If it exists, ensure that it's owned by this project to avoid artifact theft.
+	if err := sc.Bucket(gcsBucket).Create(ctx, projectID, nil); err != nil {
+		// if 409, fetch the bucket to compare project IDs.
+		gerr, ok := err.(*googleapi.Error)
+		if ok && gerr.Code == 409 {
+			policy, err := sc.Bucket(gcsBucket).IAM().Policy(ctx)
+			if err != nil {
+				return fmt.Errorf("could not check policy of gs://%s: %v", gcsBucket, err)
+			}
+			if !policy.HasRole("projectOwner:"+projectID, "roles/storage.legacyBucketOwner") {
+				jdata, _ := json.MarshalIndent(policy, " ", " ")
+				log.Printf("Artifacts bucket policy:\n%s\n", jdata)
+				return errors.New("artifacts bucket exists, but is owned by someone else")
+			}
+		} else {
+			return fmt.Errorf("could not create artifact bucket: %v", err)
+		}
+	}
 
 	// For each execution,
+	execErrors := make(chan error)
+	var execWG sync.WaitGroup
 	for i, execution := range cfg.Executions {
-		// - Create subscription
-		sname := fmt.Sprintf("workflow-%s-%d", workflowID, i)
-		executionSubscription := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, sname)
+		execWG.Add(1)
+		go func(i int, execution config.Execution) {
+			defer execWG.Done()
+			// - Create subscription
+			sname := fmt.Sprintf("workflow-%s-%d", workflowID, i)
+			executionSubscription := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, sname)
 
-		if _, err := ps.Projects.Subscriptions.Create(executionSubscription, &v1pubsub.Subscription{
-			Name:  sname,
-			Topic: workflowTopic,
-		}).Do(); err != nil {
-			return fmt.Errorf("could not create %q subscription: %v", execution.Name, err)
-		}
+			log.Printf("%q execution subscription: %s", execution.Name, sname)
+			if _, err := ps.Projects.Subscriptions.Create(executionSubscription, &v1pubsub.Subscription{
+				Name:  sname,
+				Topic: workflowTopic,
+			}).Do(); err != nil {
+				execErrors <- fmt.Errorf("could not create %q subscription: %v", execution.Name, err)
+				return
+			}
 
-		var waitExecutions []string
-		for _, param := range execution.Params {
-			waitExecutions = append(waitExecutions, param.Name)
-		}
+			var waitExecutions []string
+			for _, param := range execution.Params {
+				waitExecutions = append(waitExecutions, param.Name)
+			}
 
-		// - Augment steps with wait/complete
-		build := bconfigs[execution.Name]
-		build.Steps = append([]*v1cloudbuild.BuildStep{{
-			Name: "gcr.io/cloud-workflows/wait",
-			Args: append(
-				[]string{
-					"gs://todo",
-					workflowID,
-					executionSubscription,
+			// - Augment steps with wait/complete
+			build := bconfigs[execution.Name]
+			build.Steps = append([]*v1cloudbuild.BuildStep{{
+				Name: "gcr.io/cloud-workflows/wait",
+				Args: append(
+					[]string{
+						gcsPrefix,
+						workflowID,
+						executionSubscription,
+					},
+					waitExecutions...,
+				),
+			}}, build.Steps...)
+			build.Steps = append(build.Steps,
+				&v1cloudbuild.BuildStep{
+					Name: "gcr.io/cloud-workflows/complete",
+					Args: []string{
+						"gs://todo",
+						workflowID,
+						execution.Name,
+					},
 				},
-				waitExecutions...,
-			),
-		}}, build.Steps...)
-		build.Steps = append(build.Steps,
-			&v1cloudbuild.BuildStep{
-				Name: "gcr.io/cloud-workflows/complete",
-				Args: []string{
-					"gs://todo",
-					workflowID,
-					execution.Name,
-				},
-			},
-		)
+			)
 
-		// - Begin execution
-		_, err := cb.Projects.Builds.Create(projectID, build).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("could not create %q execution: %v", execution.Name, err)
-		}
+			// - Begin execution
+			op, err := cb.Projects.Builds.Create(projectID, build).Context(ctx).Do()
+			if err != nil {
+				execErrors <- fmt.Errorf("could not create %q execution: %v", execution.Name, err)
+				return
+			}
+			if executionBuild, err := buildFromOp(op); err != nil {
+				execErrors <- fmt.Errorf("could not understand %q execution: %v", execution.Name, err)
+				return
+			} else {
+				log.Printf("%q execution is build %s", execution.Name, executionBuild.Id)
+			}
+		}(i, execution)
+	}
+
+	execWG.Wait()
+	close(execErrors)
+	for err := range execErrors {
+		return err
 	}
 
 	return nil

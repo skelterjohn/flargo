@@ -7,8 +7,8 @@ steps:
 - name: 'gcr.io/cloud-builders/docker'
   args: ['build', '--tag', 'gcr.io/$PROJECT_ID/complete', '-f', 'complete/Dockerfile', 'complete']
 # Build the wait image.
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '--tag', 'gcr.io/$PROJECT_ID/wait', '-f', 'wait/Dockerfile', 'wait']
+- name: 'gcr.io/cloud-builders/golang-project:wheezy'
+  args: ['github.com/skelterjohn/flargo/wait', '--skip-tests', '--base-image=gcr.io/cloud-builders/gcloud', '--tag', 'gcr.io/$PROJECT_ID/wait']
 
 images:
 - 'gcr.io/$PROJECT_ID/coord'
