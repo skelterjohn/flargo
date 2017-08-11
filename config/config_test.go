@@ -48,7 +48,7 @@ exec: deploy_to_prod(dev_to_prod) deploy_prod.yaml
 
 # Once prod is ready, run the probes (built earlier) to check that things are
 # working.
-exec: test_prod(deploy_to_prod as deploy, build_probes) test_prod.yaml
+exec: test_prod(deploy_to_prod, build_probes) test_prod.yaml
 `)
 	expected := Config{
 		Executions: []Execution{{
@@ -93,8 +93,7 @@ exec: test_prod(deploy_to_prod as deploy, build_probes) test_prod.yaml
 			Type: "exec",
 			Name: "test_prod",
 			Params: []Param{{
-				Name:  "deploy_to_prod",
-				Alias: "deploy",
+				Name: "deploy_to_prod",
 			}, {
 				Name: "build_probes",
 			}},

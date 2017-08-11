@@ -4,4 +4,5 @@ steps:
   args:
   - '-c'
   - |
-    echo "Hello, everyone!"
+    echo "from my ancestors: $(cat /workflow_artifacts/in/left/left.txt)"
+    echo "from my ancestors: $(cat /workflow_artifacts/in/right/right.txt)"

@@ -6,3 +6,4 @@ steps:
   - |
     echo "Hello, world!"
     sleep 5s
+    echo "here is something for my start descendants" > /workflow_artifacts/out/start.txt

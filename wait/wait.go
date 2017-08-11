@@ -15,13 +15,21 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
+	"sync"
 
+	"cloud.google.com/go/storage"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 	v1pubsub "google.golang.org/api/pubsub/v1"
 )
 
@@ -49,14 +57,29 @@ func main() {
 		blocks[block] = true
 	}
 
+	if !strings.HasPrefix(gcsPrefix, "gs://") {
+		log.Fatalf("Invalid GCS prefix %q", gcsPrefix)
+	}
+	bucketObject := gcsPrefix[len("gs://"):]
+	tokens := strings.SplitN(bucketObject, "/", 2)
+	if len(tokens) != 2 {
+		log.Fatalf("Invalid GCS prefix %q", gcsPrefix)
+	}
+	bucket, object := tokens[0], tokens[1]
+
 	client := oauth2.NewClient(ctx, google.ComputeTokenSource(""))
 
-	// Poll the subscription until the blocks are resolved.
 	pubsub, err := v1pubsub.New(client)
 	if err != nil {
 		log.Fatalf("Could not create pubsub client: %v", err)
 	}
 
+	sc, err := storage.NewClient(ctx, option.WithHTTPClient(client))
+	if err != nil {
+		log.Fatalf("Could not create storage client: %v", err)
+	}
+
+	// Poll the subscription until the blocks are resolved.
 	for len(blocks) > 0 {
 		resp, err := pubsub.Projects.Subscriptions.Pull(subscriptionName, &v1pubsub.PullRequest{
 			MaxMessages: 10,
@@ -79,9 +102,76 @@ func main() {
 			if cmsg.Completed != "" && blocks[cmsg.Completed] {
 				log.Printf("Got completion %+q", cmsg)
 				delete(blocks, cmsg.Completed)
+
+				// copy the blocking execution's artifacts into this execution.
+				if err := fetchArtifacts(ctx, sc, bucket, object, cmsg.Completed); err != nil {
+					log.Fatalf("Could not fetch artifacts for %q: %v", cmsg.Completed, err)
+				}
 			}
 		}
 	}
 
-	log.Printf("TODO: pull artifacts from %s", gcsPrefix)
+	if err := os.MkdirAll(filepath.Join("/workflow_artifacts", "out"), 0755); err != nil {
+		log.Fatal("could not make artifact out directory")
+	}
+}
+
+func fetchArtifacts(ctx context.Context, sc *storage.Client, bucket, object, block string) error {
+	objItr := sc.Bucket(bucket).Objects(ctx, &storage.Query{
+		Prefix: path.Join(object, block),
+	})
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
+
+	for {
+		attrs, err := objItr.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		objName := attrs.Name
+		wg.Add(1)
+		go func(objName string) {
+			defer wg.Done()
+			r, err := sc.Bucket(bucket).Object(objName).NewReader(ctx)
+			if err != nil {
+				errCh <- fmt.Errorf("could not read object %q: %v", objName, err)
+				return
+			}
+
+			relpath, err := filepath.Rel(object, objName)
+			if err != nil {
+				errCh <- fmt.Errorf("could not get relative path from %q to %q", object, objName)
+			}
+
+			localPath := filepath.Join("/workflow_artifacts", "in", relpath)
+			localDir, _ := filepath.Split(localPath)
+			if err := os.MkdirAll(localDir, 0755); err != nil {
+				errCh <- fmt.Errorf("could not create directory for artifact %q: %v", localDir, err)
+				return
+			}
+
+			fout, err := os.Create(localPath)
+			if err != nil {
+				errCh <- fmt.Errorf("could not create local artifact %q: %v", relpath, err)
+				return
+			}
+
+			if _, err := io.Copy(fout, r); err != nil {
+				errCh <- fmt.Errorf("could not download artifact %q: %v", relpath, err)
+				return
+			}
+			log.Printf("Downloaded %s to %s", objName, fout.Name())
+		}(objName)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
+	}
+
+	return nil
 }

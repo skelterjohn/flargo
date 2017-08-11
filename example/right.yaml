@@ -4,5 +4,6 @@ steps:
   args:
   - '-c'
   - |
-    echo "Hello, right!"
+    echo "from my ancestor: $(cat /workflow_artifacts/in/start/start.txt)"
     sleep 5s
+    echo "here is something for my right descendants" > /workflow_artifacts/out/right.txt

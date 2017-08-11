@@ -205,8 +205,10 @@ func start(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
+	log.Printf("Artifacts go to %s", gcsPrefix)
+
 	// For each execution,
-	execErrors := make(chan error)
+	execErrors := make(chan error, len(cfg.Executions))
 	var execWG sync.WaitGroup
 	for i, execution := range cfg.Executions {
 		execWG.Add(1)
@@ -232,6 +234,7 @@ func start(ctx context.Context, cfg *config.Config) error {
 
 			// - Augment steps with wait/complete
 			build := bconfigs[execution.Name]
+
 			build.Steps = append([]*v1cloudbuild.BuildStep{{
 				Name: "gcr.io/cloud-workflows/wait",
 				Args: append(
@@ -247,12 +250,21 @@ func start(ctx context.Context, cfg *config.Config) error {
 				&v1cloudbuild.BuildStep{
 					Name: "gcr.io/cloud-workflows/complete",
 					Args: []string{
-						"gs://todo",
+						gcsPrefix,
 						workflowID,
 						execution.Name,
 					},
 				},
 			)
+
+			// Ensure that each step (including wait and complete) have access to the artifacts volume.
+			// The artifacts will be populated by wait, and will be copied out by complete.
+			for _, b := range build.Steps {
+				b.Volumes = append(b.Volumes, &v1cloudbuild.Volume{
+					Name: "workflow_artifacts",
+					Path: "/workflow_artifacts",
+				})
+			}
 
 			// - Begin execution
 			op, err := cb.Projects.Builds.Create(projectID, build).Context(ctx).Do()

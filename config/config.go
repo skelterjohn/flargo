@@ -37,8 +37,7 @@ type Execution struct {
 }
 
 type Param struct {
-	Name  string
-	Alias string
+	Name string
 }
 
 func Load(path string) (*Config, error) {
@@ -98,20 +97,13 @@ func Parse(r io.Reader) (*Config, error) {
 			}
 			ptTokens := strings.Fields(pt)
 
-			var name, alias string
+			var name string
 			name = ptTokens[0]
-			if len(ptTokens) > 1 {
-				if len(ptTokens) != 3 {
-					return nil, fmt.Errorf("line %d: wrong number of tokens for param %q", lineNumber, pt)
-				}
-				if ptTokens[1] != "as" {
-					return nil, fmt.Errorf("line %d: expected 'name as alias'", lineNumber)
-				}
-				alias = ptTokens[2]
+			if len(ptTokens) != 1 {
+				return nil, fmt.Errorf("line %d: wrong number of tokens for param %q", lineNumber, pt)
 			}
 			e.Params = append(e.Params, Param{
-				Name:  name,
-				Alias: alias,
+				Name: name,
 			})
 		}
 
